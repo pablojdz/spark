@@ -1,0 +1,126 @@
+from pyspark.sql.functions import expr, regexp_replace, col, monotonically_increasing_id, upper, initcap, when, count, isnan, isnull, split, explode, trim, lit, sha2, concat, desc, sum, lower
+
+# import iabsa data from csv
+iabsa_data = "/FileStore/tables/*com.csv"
+iabsa_df = spark.read.option("escape", "\"").csv(iabsa_data,header=True, inferSchema=True)
+
+#:::::::::::::::: Start data cleaning :::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+# drop description column
+iabsa_df = iabsa_df.drop("description") # count: 610,782
+
+# capitalize (title) color, product_name, product_category
+iabsa_df = iabsa_df.withColumn('color',initcap(col('color')))
+iabsa_df = iabsa_df.withColumn('product_name',initcap(col('product_name')))
+iabsa_df = iabsa_df.withColumn('product_category',initcap(col('product_category')))
+
+# upper case total_sizes and available_size
+iabsa_df = iabsa_df.withColumn('total_sizes',upper(col('total_sizes')))
+iabsa_df = iabsa_df.withColumn('available_size',upper(col('available_size')))
+
+# remove $ character from mrp column
+iabsa_df = iabsa_df.withColumn('mrp', regexp_replace('mrp', r'\$', ''))
+
+# fill NaN value from color, total_sizes and available_size column by None value
+iabsa_df = iabsa_df.na.fill('None','color')
+iabsa_df = iabsa_df.na.fill('None','total_sizes')
+iabsa_df = iabsa_df.na.fill('None','available_size')
+
+# convert mrp column to float type
+iabsa_df = iabsa_df.withColumn('mrp',iabsa_df.mrp.cast("float")) # other way: col('mrp').astype('float')
+
+# add uid column
+iabsa_df = iabsa_df.withColumn('uid',sha2(concat(col("product_name"), col("mrp"), col("pdp_url"), col("total_sizes"), col("available_size"), col("color")), 256))
+
+# remove duplicated records
+iabsa_df = iabsa_df.dropDuplicates(subset=['product_name','mrp','pdp_url','total_sizes','available_size','color']) # count: 148020
+
+# drop pdp_url column
+iabsa_df = iabsa_df.drop('pdp_url')
+
+# add index_id column
+# iabsa_df = iabsa_df.withColumn('idx',monotonically_increasing_id())
+
+# :::::::::::::::: End data cleaning ::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+# :::::::::::::::: Start data transformation ::::::::::::::::::::::::::::::::::::::::::::::
+
+# split total sizes, remove white space and drop columns total_sizes and available_size from iabsa_size_df
+iabsa_size_df = iabsa_df.withColumn('size',explode(split('total_sizes',','))) # row count: 2,779,052
+iabsa_size_df = iabsa_size_df.withColumn('size', trim('size'))
+iabsa_size_df = iabsa_size_df.select('uid','product_name','mrp','brand_name','product_category','retailer','color','size') # row count: 2,779,052
+#iabsa_size_df = iabsa_size_df.drop('total_sizes','available_size')
+
+# split available sizes, remove white space and filter available size None value
+iabsa_available_size_df = iabsa_df.withColumn('available_size',explode(split('available_size',','))) # row count: 424,421
+iabsa_available_size_df = iabsa_available_size_df.withColumn('available_size', trim('available_size')) 
+iabsa_available_size_df = iabsa_available_size_df.select('uid','available_size').filter("available_size <> 'None'") # row count: 424,395
+
+# add column total_size and total_available_size with value 1
+iabsa_size_df = iabsa_size_df.withColumn('total_size',lit(1))
+iabsa_available_size_df = iabsa_available_size_df.withColumn('total_available_size',lit(1))
+
+# aggregate total size and total available size --> total size agg: 2,778,776, total available size agg: 424,283
+iabsa_size_agg_df = iabsa_size_df.groupBy('uid','product_name','mrp','brand_name','product_category','retailer','color','size')\
+                                 .agg(sum('total_size').alias('total_size'))
+iabsa_available_size_agg_df = iabsa_available_size_df.groupBy('uid','available_size')\
+                                                     .agg(sum('total_available_size').alias('total_available_size'))
+
+# join total size agg with available size agg --> row count: 2,778,776
+inventory_df = iabsa_size_agg_df.join(iabsa_available_size_agg_df,
+                                      (iabsa_size_agg_df.uid == iabsa_available_size_agg_df.uid)\
+                                      & (iabsa_size_agg_df.size == iabsa_available_size_agg_df.available_size),
+                                      'left')\
+                                .select(iabsa_size_agg_df.uid,
+                                        iabsa_size_agg_df.product_name, 
+                                        iabsa_size_agg_df.mrp, 
+                                        iabsa_size_agg_df.brand_name, 
+                                        iabsa_size_agg_df.product_category, 
+                                        iabsa_size_agg_df.retailer, 
+                                        iabsa_size_agg_df.color, 
+                                        iabsa_size_agg_df.size, 
+                                        iabsa_size_agg_df.total_size, 
+                                         when(isnull(iabsa_available_size_agg_df.total_available_size),0)\
+                                        .otherwise(iabsa_available_size_agg_df.total_available_size).alias('total_available_size'))
+
+# final aggregation, sum total_size and available_size
+inventory_df = inventory_df.groupBy('product_name','product_category','brand_name','retailer','color','size','mrp')\
+                .agg(sum('total_size').alias('total_size'), sum('total_available_size').alias('total_available_size'))
+
+# standardize brand_name
+inventory_df = inventory_df.withColumn('brand_name',\
+                             when(col('brand_name').rlike("([bB]).(tempt|TEMPT)('?|%27)(d|D)"),"B.Tempt'd")\
+                            .when(col('brand_name').rlike("^([Vv]ictoria|VICTORIA)'?s(\s+|-)([Ss]ecret|SECRET)"),"Victoria's Secret")\
+                            .when(col('brand_name').rlike("^([Hh]anky|HANKY)(\s*|-)([Pp]anky|PANKY)"),"Hanky Panky")\
+                            .when(col('brand_name').rlike("^([Cc]alvin|CALVIN)(\s*|-)([Kk]lein|KLEIN)"),"Calvin Klein")\
+                            .when(col('brand_name').rlike("^([Ww]acoal|WACOAL|s)"),"Wacoal")\
+                            .otherwise(col('brand_name')))
+
+# add is_bra column
+inventory_df = inventory_df.withColumn('is_bra',\
+                             when(col('size').rlike("^\d\d[aA-zZ].*"),True)\
+                            .when(col('size').rlike("^\d\d [aA-zZ].*"),True)\
+                            .when(col('size').rlike("^\d[xX].*"),True)\
+                            .otherwise(False))
+
+# add is_available column
+inventory_df = inventory_df.withColumn('is_available',\
+                             when(col('total_available_size') > 0,True)\
+                            .otherwise(False))
+
+# add size_group column
+inventory_df = inventory_df.withColumn('size_group',\
+                             when(col('size').rlike("^3[02][aA-zZ].*"),"Small")\
+                            .when(col('size').rlike("^3[02] [aA-zZ].*"),"Small")\
+                            .when(col('size').rlike("^3[46][aA-zZ].*"),"Medium")\
+                            .when(col('size').rlike("^3[46] [aA-zZ].*"),"Medium")\
+                            .when(col('size').rlike("^38[aA-zZ].*"),"Large")\
+                            .when(col('size').rlike("^40[aA-zZ].*"),"Large")\
+                            .when(col('size').rlike("^38 [aA-zZ].*"),"Large")\
+                            .when(col('size').rlike("^40 [aA-zZ].*"),"Large")\
+                            .when(col('size').rlike("^4[2468][aA-zZ].*"),"Extra Large")\
+                            .when(col('size').rlike("^4[2468] [aA-zZ].*"),"Extra Large")\
+                            .when(col('size').rlike("^\d[xX].*"),"Extra Large")\
+                            .otherwise("None"))
+
+# :::::::::::::::: End data transformation ::::::::::::::::::::::::::::::::::::::::::::::
