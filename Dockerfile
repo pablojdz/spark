@@ -11,7 +11,7 @@ ENV JAVA_HOME=/usr/lib/jvm/java-${JAVA_VERSION}-openjdk-amd64
 ENV PATH="$PATH:$JAVA_HOME/bin"
 
 # :::::::: INSTALL PYTHON :::::::::::::::::::
-ARG SHARED_WORKSPACE=/opt/spark/work
+ARG SHARED_WORKSPACE=/opt/spark/work-dir
 ARG PYTHON_VERSION=3.8.10
 RUN mkdir -p ${SHARED_WORKSPACE} && \
     apt-get update -y && \
