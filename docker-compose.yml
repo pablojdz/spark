@@ -67,19 +67,19 @@ services:
       bash -c "../sbin/start-worker.sh spark://spark-master:7077;
       tail -f /dev/null"
     # command: ../bin/spark-class org.apache.spark.deploy.worker.Worker
-  # jupyter-lab:
-  #   image: jupyter-lab:${JUPYTERLAB_VERSION}
-  #   container_name: jupyter-lab
-  #   hostname: jupyter-lab
-  #   ports:
-  #     - 8888:8888
-  #     - 4040:4040
-  #   networks:
-  #     - spark-net
-  #   volumes:
-  #     - ./workspace:${WORK_DIR}
-  #   depends_on:
-  #     - spark-master
+  jupyter-lab:
+    image: jupyter-lab:${JUPYTERLAB_VERSION}
+    container_name: jupyter-lab
+    hostname: jupyter-lab
+    ports:
+      - 8888:8888
+      - 4040:4040
+    networks:
+      - spark-net
+    volumes:
+      - ./workspace:${WORK_DIR}
+    depends_on:
+      - spark-master
 networks:
   spark-net:
     name: spark-net

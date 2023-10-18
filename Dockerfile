@@ -12,7 +12,7 @@ ENV PATH="$PATH:$JAVA_HOME/bin"
 
 # :::::::: INSTALL PYTHON :::::::::::::::::::
 ARG SHARED_WORKSPACE=/opt/spark/work
-ARG PYTHON_VERSION=3.9.2
+ARG PYTHON_VERSION=3.8.10
 RUN mkdir -p ${SHARED_WORKSPACE} && \
     apt-get update -y && \
     apt-get install libssl-dev openssl make gcc -y wget -y zlib1g-dev -y libffi-dev -y libsqlite3-dev -y && \
@@ -26,8 +26,8 @@ RUN cd /opt/Python-${PYTHON_VERSION} && \
     make install 
 
 # :::::::::: INSTALL JupyterLab :::::::::::::
-ARG SPARK_VERSION=3.3.2
-ARG JUPYTERLAB_VERSION=3.6.2
+ARG SPARK_VERSION=3.5.0
+ARG JUPYTERLAB_VERSION=4.0.7
 RUN apt-get update -y && \
     pip3 install --upgrade pip && \
     pip3 install wget pyspark==${SPARK_VERSION} jupyterlab==${JUPYTERLAB_VERSION}
